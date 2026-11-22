@@ -1,9 +1,10 @@
 /*! news-ticker-card.js — modern broadcast news ticker for Home Assistant
  *  Headlines from /local/news_*.json  (flat ["Headline", ...] arrays)
- *  Info chips (gold/silver/weather/date/location) from /local/info.json
- *  v2.2 — 4 styles, EN/TA toggle, live clock, rotating info slot, visual editor.
+ *  Info (gold/silver/weather/date/location) from /local/info.json
+ *  v2.4 — 4 styles, EN/TA toggle, live clock, info rotates in the badge
+ *         (small text, alternating with the label) or as a standalone chip.
  */
-const NTC_VERSION = "2.3";
+const NTC_VERSION = "2.4";
 const NTC_STYLES = ["breaking", "glass", "live", "split"];
 const NTC_DEFAULT_LABEL = { breaking: "BREAKING", glass: "NEWS", live: "LIVE", split: "TOP NEWS" };
 const NTC_INFO_ALL = ["gold24", "gold22", "silver", "weather", "date", "location"];
@@ -36,7 +37,7 @@ class NewsTickerCard extends HTMLElement {
       show_info: false,
       info_items: ["gold24", "silver", "weather", "date"],
       info_rotate_seconds: 6,
-      info_position: "badge",   // "badge" (small line under the label) | "inline" (chip)
+      info_position: "badge",   // "badge" = rotate with the label (small text) | "inline" = separate chip
       location: "",
     }, config);
     this._config.style = style;
@@ -53,12 +54,13 @@ class NewsTickerCard extends HTMLElement {
     if (!this.shadowRoot) this.attachShadow({ mode: "open" });
     this._built = false;
     this._info = null;
+    this._badgeIdx = 0;
     this._infoIdx = 0;
     this._build();
     this._loadNews();
     this._loadInfo();
     this._startClock();
-    this._startInfoRotate();
+    this._startRotate();
     this._scheduleRefresh();
   }
 
@@ -67,12 +69,14 @@ class NewsTickerCard extends HTMLElement {
   connectedCallback() {
     if (this._config && !this._built) {
       this._build(); this._loadNews(); this._loadInfo();
-      this._startClock(); this._startInfoRotate(); this._scheduleRefresh();
+      this._startClock(); this._startRotate(); this._scheduleRefresh();
     }
   }
   disconnectedCallback() {
-    clearInterval(this._clockTimer); clearInterval(this._refreshTimer); clearInterval(this._infoTimer);
+    clearInterval(this._clockTimer); clearInterval(this._refreshTimer); clearInterval(this._rotTimer);
   }
+
+  _inline() { return this._config.info_position === "inline"; }
 
   _scheduleRefresh() {
     clearInterval(this._refreshTimer);
@@ -123,8 +127,8 @@ class NewsTickerCard extends HTMLElement {
       const resp = await fetch(u, { cache: "no-store" });
       const doc = await resp.json();
       this._info = doc && doc.items ? doc : { items: {}, location: "" };
-      this._renderInfo();
-    } catch (e) { /* leave last good info */ }
+    } catch (e) { /* keep last good */ }
+    if (this._inline()) this._renderInfoChip(); else this._renderBadge();
   }
   _setStatus(msg) {
     const track = this.shadowRoot && this.shadowRoot.getElementById("track");
@@ -140,10 +144,12 @@ class NewsTickerCard extends HTMLElement {
     return { breaking: "◆", glass: "/", live: "•", split: "·" }[this._config.style];
   }
 
+  _labelText() {
+    return this._lang === "ta" ? (this._config.label_ta || this._config.label) : this._config.label;
+  }
   _infoValue(id) {
-    if (id === "date") {
+    if (id === "date")
       return new Date().toLocaleDateString(undefined, { weekday: "short", day: "2-digit", month: "short" });
-    }
     if (id === "location") {
       const loc = this._config.location || (this._info && this._info.location) || "";
       return loc ? "📍 " + loc : "";
@@ -158,31 +164,65 @@ class NewsTickerCard extends HTMLElement {
     });
     return out;
   }
-  _renderInfo() {
+  _infoHTML(id) {
+    const label = NTC_INFO_LABEL[id];
+    return (label ? '<span class="ilabel">' + this._esc(label) + "</span>" : "") +
+           '<span class="ival">' + this._esc(this._infoValue(id)) + "</span>";
+  }
+
+  // badge mode: a single slot that cycles [label, ...info items]
+  _badgeSeq() {
+    const items = (this._config.show_info && !this._inline()) ? this._activeInfoItems() : [];
+    return ["__label__"].concat(items);
+  }
+  _renderBadge() {
+    const slot = this.shadowRoot && this.shadowRoot.getElementById("label");
+    if (!slot) return;
+    const seq = this._badgeSeq();
+    if (this._badgeIdx >= seq.length) this._badgeIdx = 0;
+    const it = seq[this._badgeIdx];
+    if (it === "__label__") slot.innerHTML = '<span class="blabel">' + this._esc(this._labelText()) + "</span>";
+    else slot.innerHTML = '<span class="binfo">' + this._infoHTML(it) + "</span>";
+  }
+
+  // inline mode: standalone chip element (#info)
+  _renderInfoChip() {
     const el = this.shadowRoot && this.shadowRoot.getElementById("info");
     if (!el) return;
     const items = this._activeInfoItems();
     if (!items.length) { el.style.display = "none"; el.innerHTML = ""; return; }
     el.style.display = "flex";
     if (this._infoIdx >= items.length) this._infoIdx = 0;
-    const id = items[this._infoIdx];
-    const label = NTC_INFO_LABEL[id];
-    const val = this._infoValue(id);
-    el.innerHTML =
-      (label ? '<span class="ilabel">' + this._esc(label) + "</span>" : "") +
-      '<span class="ival">' + this._esc(val) + "</span>";
+    el.innerHTML = this._infoHTML(items[this._infoIdx]);
   }
-  _startInfoRotate() {
-    clearInterval(this._infoTimer);
-    if (!this._config.show_info) return;
+
+  _startRotate() {
+    clearInterval(this._rotTimer);
     const secs = Math.max(2, Number(this._config.info_rotate_seconds) || 6);
-    this._infoTimer = setInterval(() => {
-      const items = this._activeInfoItems();
-      if (items.length <= 1) { this._renderInfo(); return; }
-      const el = this.shadowRoot && this.shadowRoot.getElementById("info");
-      this._infoIdx = (this._infoIdx + 1) % items.length;
-      if (el) { el.style.opacity = "0"; setTimeout(() => { this._renderInfo(); el.style.opacity = "1"; }, 180); }
-      else this._renderInfo();
+    if (this._inline()) {
+      this._renderBadge();          // label static
+      this._renderInfoChip();
+      if (!this._config.show_info) return;
+      this._rotTimer = setInterval(() => {
+        const items = this._activeInfoItems();
+        if (items.length <= 1) { this._renderInfoChip(); return; }
+        const el = this.shadowRoot && this.shadowRoot.getElementById("info");
+        this._infoIdx = (this._infoIdx + 1) % items.length;
+        if (el) { el.style.opacity = "0"; setTimeout(() => { this._renderInfoChip(); el.style.opacity = "1"; }, 180); }
+        else this._renderInfoChip();
+      }, secs * 1000);
+      return;
+    }
+    // badge mode
+    this._renderBadge();
+    if (!this._config.show_info) return;
+    this._rotTimer = setInterval(() => {
+      const seq = this._badgeSeq();
+      if (seq.length <= 1) { this._renderBadge(); return; }
+      const slot = this.shadowRoot && this.shadowRoot.getElementById("label");
+      this._badgeIdx = (this._badgeIdx + 1) % seq.length;
+      if (slot) { slot.style.opacity = "0"; setTimeout(() => { this._renderBadge(); slot.style.opacity = "1"; }, 180); }
+      else this._renderBadge();
     }, secs * 1000);
   }
 
@@ -190,8 +230,8 @@ class NewsTickerCard extends HTMLElement {
     const c = this._config, root = this.shadowRoot;
     const accent = this._accent();
     const fs = Number(c.font_size) || 18;
-    const ifs = Math.max(10, Math.round(fs - 28));     // small info text
-    const inBadge = c.info_position !== "inline";
+    const ifs = Math.max(10, Math.round(fs - 24));     // small info text in badge
+    const inline = this._inline();
     root.innerHTML = `
       <style>
         :host { display: block; }
@@ -199,16 +239,13 @@ class NewsTickerCard extends HTMLElement {
           height: calc(${fs}px + 24px); border-radius: 12px; overflow: hidden; color: #fff;
           font-family: var(--ntc-font, system-ui, sans-serif); }
         .rail { display: none; width: 4px; background: var(--accent); }
-        .badge { display: ${c.show_label ? "flex" : "none"}; flex-direction: column; justify-content: center;
-          white-space: nowrap; font-weight: 500; line-height: 1.1; }
-        .brow { display: flex; align-items: center; gap: 8px; }
-        .badge .dot { width: 8px; height: 8px; border-radius: 50%; background: #fff; }
-        #label { font-size: ${Math.max(12, fs - 3)}px; }
-        /* small info line inside the badge */
-        .binfo { display: none; margin-top: 2px; white-space: nowrap; transition: opacity .18s ease; }
+        .badge { display: ${c.show_label ? "flex" : "none"}; align-items: center; gap: 8px; white-space: nowrap; font-weight: 500; }
+        .badge .dot { width: 8px; height: 8px; border-radius: 50%; background: #fff; flex: 0 0 auto; }
+        #label { display: inline-flex; align-items: center; transition: opacity .18s ease; }
+        .blabel { font-size: ${Math.max(12, fs - 3)}px; }
+        .binfo { display: inline-flex; align-items: baseline; }
         .binfo .ilabel { font-size: ${ifs}px; font-weight: 500; opacity: .62; letter-spacing: .3px; margin-right: 5px; }
-        .binfo .ival { font-size: ${ifs}px; font-weight: 500; color: inherit; opacity: .95; }
-        /* standalone chip (info_position: inline) */
+        .binfo .ival { font-size: ${ifs}px; font-weight: 500; opacity: .95; }
         .info { display: none; align-items: center; gap: 7px; padding: 0 14px; white-space: nowrap;
           background: rgba(0,0,0,.22); transition: opacity .18s ease; }
         .info .ilabel { font-size: ${Math.max(10, fs - 7)}px; font-weight: 500; opacity: .7; letter-spacing: .4px; }
@@ -260,11 +297,8 @@ class NewsTickerCard extends HTMLElement {
       </style>
       <div class="bar" data-style="${c.style}">
         <div class="rail"></div>
-        <div class="badge">
-          <span class="brow"><span class="dot"></span><span id="label"></span></span>
-          ${inBadge ? '<span class="binfo" id="info"></span>' : ""}
-        </div>
-        ${inBadge ? "" : '<div class="info" id="info"></div>'}
+        <div class="badge"><span class="dot"></span><span id="label"></span></div>
+        ${inline ? '<div class="info" id="info"></div>' : ""}
         <div class="tk"><div class="trk" id="track"></div></div>
         <div class="side">
           <div id="clock"></div>
@@ -272,24 +306,21 @@ class NewsTickerCard extends HTMLElement {
         </div>
       </div>`;
     this._built = true;
-    this._syncLabel(); this._syncToggle();
+    this._renderBadge();
+    this._syncToggle();
     const tog = root.getElementById("toggle");
     if (tog) tog.addEventListener("click", (e) => {
       const l = e.target && e.target.getAttribute("data-l");
       if (!l || l === this._lang) return;
       this._lang = l;
       try { localStorage.setItem("ntc_lang", l); } catch (err) {}
-      this._syncLabel(); this._syncToggle(); this._loadNews();
+      this._renderBadge(); this._syncToggle(); this._loadNews();
     });
     this._updateTime();
     if (this._headlines) this._renderTicker();
-    if (this._info) this._renderInfo();
+    if (this._info && this._inline()) this._renderInfoChip();
   }
 
-  _syncLabel() {
-    const el = this.shadowRoot.getElementById("label");
-    if (el) el.textContent = this._lang === "ta" ? (this._config.label_ta || this._config.label) : this._config.label;
-  }
   _syncToggle() {
     const t = this.shadowRoot.getElementById("toggle");
     if (!t) return;
@@ -331,15 +362,17 @@ class NewsTickerCardEditor extends HTMLElement {
     const row = (label, key, type, val) =>
       '<label class="r"><span>' + label + '</span><input data-key="' + key + '" type="' + type + '" value="' + esc(val) + '" ' +
       (type === "checkbox" && val ? "checked" : "") + "></label>";
+    const opt = (key, val, choices) =>
+      '<label class="r"><span>' + key.label + '</span><select data-key="' + key.k + '">' +
+      choices.map((o) => '<option value="' + o + '"' + (val === o ? " selected" : "") + ">" + o + "</option>").join("") + "</select></label>";
     const styleSel =
       '<label class="r"><span>Style</span><select data-key="style">' +
       NTC_STYLES.map((s) => '<option value="' + s + '"' + (c.style === s ? " selected" : "") + ">" +
         s.charAt(0).toUpperCase() + s.slice(1) + "</option>").join("") + "</select></label>";
     const sel = Array.isArray(c.info_items) ? c.info_items : [];
-    const infoChecks = '<div class="sec">Info items (left of headlines)</div>' +
-      NTC_INFO_ALL.map((id) => '<label class="r"><span>' + (NTC_INFO_LABEL[id] || id) +
-        ' <small>(' + id + ')</small></span><input data-info="' + id + '" type="checkbox" ' +
-        (sel.indexOf(id) >= 0 ? "checked" : "") + "></label>").join("");
+    const infoChecks = NTC_INFO_ALL.map((id) => '<label class="r"><span>' + (NTC_INFO_LABEL[id] || id) +
+      ' <small>(' + id + ')</small></span><input data-info="' + id + '" type="checkbox" ' +
+      (sel.indexOf(id) >= 0 ? "checked" : "") + "></label>").join("");
     this.shadowRoot.innerHTML = `
       <style>
         .r{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:5px 0;}
@@ -367,8 +400,9 @@ class NewsTickerCardEditor extends HTMLElement {
         ${row("Show EN/TA toggle", "show_lang_toggle", "checkbox", c.show_lang_toggle !== false)}
         ${row("Pause on hover", "pause_on_hover", "checkbox", c.pause_on_hover !== false)}
         ${row("Uppercase badge", "uppercase", "checkbox", c.uppercase !== false)}
-        <div class="sec">Info slot</div>
-        ${row("Show info slot", "show_info", "checkbox", !!c.show_info)}
+        <div class="sec">Info</div>
+        ${row("Show info", "show_info", "checkbox", !!c.show_info)}
+        ${opt({ k: "info_position", label: "Info position" }, c.info_position || "badge", ["badge", "inline"])}
         ${row("Rotate every (seconds)", "info_rotate_seconds", "number", c.info_rotate_seconds != null ? c.info_rotate_seconds : 6)}
         ${infoChecks}
         <div class="sec">Sources</div>
@@ -387,6 +421,9 @@ class NewsTickerCardEditor extends HTMLElement {
         commit(k, v);
       });
     });
+    this.shadowRoot.querySelectorAll("select[data-key]").forEach((s) => {
+      s.addEventListener("change", (e) => commit(e.target.getAttribute("data-key"), e.target.value));
+    });
     this.shadowRoot.querySelectorAll("input[data-info]").forEach((inp) => {
       inp.addEventListener("change", () => {
         const items = [];
@@ -394,14 +431,12 @@ class NewsTickerCardEditor extends HTMLElement {
         commit("info_items", items);
       });
     });
-    const s = this.shadowRoot.querySelector("select[data-key='style']");
-    if (s) s.addEventListener("change", (e) => commit("style", e.target.value));
   }
 }
 customElements.define("news-ticker-card-editor", NewsTickerCardEditor);
 
 window.customCards = window.customCards || [];
 window.customCards.push({ type: "news-ticker-card", name: "News Ticker Card",
-  description: "Broadcast-style scrolling news ticker (EN/Tamil), 4 styles, live clock, info line.", preview: true });
+  description: "Broadcast-style scrolling news ticker (EN/Tamil), 4 styles, live clock, rotating info.", preview: true });
 console.info("%c NEWS-TICKER-CARD %c v" + NTC_VERSION + " ",
   "background:#e10600;color:#fff;font-weight:700;border-radius:4px 0 0 4px;", "background:#333;color:#fff;border-radius:0 4px 4px 0;");
