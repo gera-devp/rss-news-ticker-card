@@ -1,6 +1,6 @@
 # 📰 News Ticker Card
 
-![version](https://img.shields.io/badge/version-2.5-blue) ![HACS](https://img.shields.io/badge/HACS-Custom-orange) ![Home Assistant](https://img.shields.io/badge/Home%20Assistant-2024.1+-green) ![license](https://img.shields.io/badge/license-MIT-lightgrey)
+![version](https://img.shields.io/badge/version-2.6-blue) ![HACS](https://img.shields.io/badge/HACS-Custom-orange) ![Home Assistant](https://img.shields.io/badge/Home%20Assistant-2024.1+-green) ![license](https://img.shields.io/badge/license-MIT-lightgrey)
 
 A modern, broadcast-style scrolling **news ticker** card for Home Assistant dashboards. Reads headlines from a simple local JSON file, scrolls them smoothly like a TV news channel, and ships with **4 selectable styles**, a **live clock**, and a **two-language toggle** (e.g. English / Tamil) — all configurable from a built-in visual editor.
 
@@ -140,6 +140,7 @@ info_items:
 | `show_info`        | boolean | `false`              | Show the rotating info chip beside the badge |
 | `info_items`       | list    | `[gold24, silver, weather, date]` | Which info items to rotate. Any of: `gold24`, `gold22`, `silver`, `weather`, `date`, `location` |
 | `info_rotate_seconds` | number | `6`               | Seconds each info item is shown before rotating |
+| `info_font_size`   | number  | `0`                  | Info text size in px. `0` = auto (small). If bigger than the badge label, info moves to a 2nd row under it |
 | `info_position`    | string  | `badge`              | `badge` = rotates in the badge with the label (small text); `inline` = separate chip |
 | `info_url`         | string  | `/local/info.json`   | Path to the info JSON written by the generator |
 | `location`         | string  | `""`                 | Place label for the `location` chip; blank falls back to `info.json`'s location |

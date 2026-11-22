@@ -1,11 +1,12 @@
 /*! news-ticker-card.js — modern broadcast news ticker for Home Assistant
  *  Headlines from /local/news_*.json  (flat ["Headline", ...] arrays)
  *  Info (gold/silver/weather/date/location) from /local/info.json
- *  v2.4 — 4 styles, EN/TA toggle, live clock, info rotates in the badge
- *         (small text, alternating with the label) or as a standalone chip.
- *  v2.5 — badge width is pinned to its widest frame so it never resizes mid-cycle.
+ *  v2.4 — 4 styles, EN/TA toggle, live clock, info rotates in the badge.
+ *  v2.5 — badge width pinned to its widest frame so it never resizes mid-cycle.
+ *  v2.6 — info_font_size setting; when info text is bigger than the label it
+ *         moves to a 2nd row under the label (badge grows) instead of one line.
  */
-const NTC_VERSION = "2.5";
+const NTC_VERSION = "2.6";
 const NTC_STYLES = ["breaking", "glass", "live", "split"];
 const NTC_DEFAULT_LABEL = { breaking: "BREAKING", glass: "NEWS", live: "LIVE", split: "TOP NEWS" };
 const NTC_INFO_ALL = ["gold24", "gold22", "silver", "weather", "date", "location"];
@@ -38,7 +39,8 @@ class NewsTickerCard extends HTMLElement {
       show_info: false,
       info_items: ["gold24", "silver", "weather", "date"],
       info_rotate_seconds: 6,
-      info_position: "badge",   // "badge" = rotate with the label (small text) | "inline" = separate chip
+      info_position: "badge",   // "badge" = rotate with the label | "inline" = separate chip
+      info_font_size: 0,        // 0 = auto (small). Bigger than the label -> 2nd row.
       location: "",
     }, config);
     this._config.style = style;
@@ -78,6 +80,21 @@ class NewsTickerCard extends HTMLElement {
   }
 
   _inline() { return this._config.info_position === "inline"; }
+  _sizes() {
+    const fs = Number(this._config.font_size) || 18;
+    const labelSize = Math.max(12, fs - 3);
+    const iSize = Number(this._config.info_font_size) > 0
+      ? Number(this._config.info_font_size)
+      : Math.max(10, Math.round(fs - 24));
+    return { fs: fs, labelSize: labelSize, iSize: iSize };
+  }
+  // "inline" chip | "two" (label row + info row) | "badge1" (rotate on one line)
+  _mode() {
+    if (this._inline()) return "inline";
+    if (!this._config.show_info) return "badge1";
+    const s = this._sizes();
+    return s.iSize > s.labelSize ? "two" : "badge1";
+  }
 
   _scheduleRefresh() {
     clearInterval(this._refreshTimer);
@@ -129,7 +146,7 @@ class NewsTickerCard extends HTMLElement {
       const doc = await resp.json();
       this._info = doc && doc.items ? doc : { items: {}, location: "" };
     } catch (e) { /* keep last good */ }
-    if (this._inline()) this._renderInfoChip(); else { this._renderBadge(); this._fitBadge(); }
+    this._renderForMode();
   }
   _setStatus(msg) {
     const track = this.shadowRoot && this.shadowRoot.getElementById("track");
@@ -171,9 +188,19 @@ class NewsTickerCard extends HTMLElement {
            '<span class="ival">' + this._esc(this._infoValue(id)) + "</span>";
   }
 
-  // badge mode: a single slot that cycles [label, ...info items]
+  _renderForMode() {
+    if (this._mode() === "badge1") { this._renderBadge(); this._fitBadge(); }
+    else { this._renderLabel(); this._renderInfo(); }
+  }
+
+  _renderLabel() {
+    const slot = this.shadowRoot && this.shadowRoot.getElementById("label");
+    if (slot) slot.innerHTML = '<span class="blabel">' + this._esc(this._labelText()) + "</span>";
+  }
+
+  // badge1: single slot cycling [label, ...info items]
   _badgeSeq() {
-    const items = (this._config.show_info && !this._inline()) ? this._activeInfoItems() : [];
+    const items = (this._config.show_info && this._mode() === "badge1") ? this._activeInfoItems() : [];
     return ["__label__"].concat(items);
   }
   _renderBadge() {
@@ -185,10 +212,8 @@ class NewsTickerCard extends HTMLElement {
     if (it === "__label__") slot.innerHTML = '<span class="blabel">' + this._esc(this._labelText()) + "</span>";
     else slot.innerHTML = '<span class="binfo">' + this._infoHTML(it) + "</span>";
   }
-
-  // measure every badge frame, pin the slot to the widest so it never resizes mid-cycle
   _fitBadge() {
-    if (this._inline()) return;
+    if (this._mode() !== "badge1") return;
     const slot = this.shadowRoot && this.shadowRoot.getElementById("label");
     const m = this.shadowRoot && this.shadowRoot.getElementById("measure");
     if (!slot || !m) return;
@@ -203,13 +228,13 @@ class NewsTickerCard extends HTMLElement {
     slot.style.minWidth = max > 0 ? max + "px" : "";
   }
 
-  // inline mode: standalone chip element (#info)
-  _renderInfoChip() {
+  // two-row & inline: a separate #info element cycles the info items
+  _renderInfo() {
     const el = this.shadowRoot && this.shadowRoot.getElementById("info");
     if (!el) return;
     const items = this._activeInfoItems();
-    if (!items.length) { el.style.display = "none"; el.innerHTML = ""; return; }
-    el.style.display = "flex";
+    if (!items.length) { el.style.visibility = "hidden"; el.innerHTML = ""; return; }
+    el.style.visibility = "visible";
     if (this._infoIdx >= items.length) this._infoIdx = 0;
     el.innerHTML = this._infoHTML(items[this._infoIdx]);
   }
@@ -217,58 +242,69 @@ class NewsTickerCard extends HTMLElement {
   _startRotate() {
     clearInterval(this._rotTimer);
     const secs = Math.max(2, Number(this._config.info_rotate_seconds) || 6);
-    if (this._inline()) {
-      this._renderBadge();          // label static
-      this._renderInfoChip();
+    const mode = this._mode();
+    if (mode === "badge1") {
+      this._renderBadge(); this._fitBadge();
       if (!this._config.show_info) return;
       this._rotTimer = setInterval(() => {
-        const items = this._activeInfoItems();
-        if (items.length <= 1) { this._renderInfoChip(); return; }
-        const el = this.shadowRoot && this.shadowRoot.getElementById("info");
-        this._infoIdx = (this._infoIdx + 1) % items.length;
-        if (el) { el.style.opacity = "0"; setTimeout(() => { this._renderInfoChip(); el.style.opacity = "1"; }, 180); }
-        else this._renderInfoChip();
+        const seq = this._badgeSeq();
+        if (seq.length <= 1) { this._renderBadge(); return; }
+        const slot = this.shadowRoot && this.shadowRoot.getElementById("label");
+        this._badgeIdx = (this._badgeIdx + 1) % seq.length;
+        if (slot) { slot.style.opacity = "0"; setTimeout(() => { this._renderBadge(); slot.style.opacity = "1"; }, 180); }
+        else this._renderBadge();
       }, secs * 1000);
       return;
     }
-    // badge mode
-    this._renderBadge();
+    // two-row or inline: label static, info element rotates
+    this._renderLabel();
+    this._renderInfo();
     if (!this._config.show_info) return;
     this._rotTimer = setInterval(() => {
-      const seq = this._badgeSeq();
-      if (seq.length <= 1) { this._renderBadge(); return; }
-      const slot = this.shadowRoot && this.shadowRoot.getElementById("label");
-      this._badgeIdx = (this._badgeIdx + 1) % seq.length;
-      if (slot) { slot.style.opacity = "0"; setTimeout(() => { this._renderBadge(); slot.style.opacity = "1"; }, 180); }
-      else this._renderBadge();
+      const items = this._activeInfoItems();
+      if (items.length <= 1) { this._renderInfo(); return; }
+      const el = this.shadowRoot && this.shadowRoot.getElementById("info");
+      this._infoIdx = (this._infoIdx + 1) % items.length;
+      if (el) { el.style.opacity = "0"; setTimeout(() => { this._renderInfo(); el.style.opacity = "1"; }, 180); }
+      else this._renderInfo();
     }, secs * 1000);
   }
 
   _build() {
     const c = this._config, root = this.shadowRoot;
     const accent = this._accent();
-    const fs = Number(c.font_size) || 18;
-    const ifs = Math.max(10, Math.round(fs - 24));     // small info text in badge
-    const inline = this._inline();
+    const s = this._sizes();
+    const fs = s.fs, labelSize = s.labelSize, iSize = s.iSize;
+    const mode = this._mode();
+    const inline = mode === "inline";
+    const two = mode === "two";
+    const barH = two ? Math.max(fs + 24, labelSize + iSize + 22) : (fs + 24);
     root.innerHTML = `
       <style>
         :host { display: block; }
         .bar { --accent: ${accent}; display: flex; align-items: stretch; position: relative;
-          height: calc(${fs}px + 24px); border-radius: 12px; overflow: hidden; color: #fff;
+          height: ${barH}px; border-radius: 12px; overflow: hidden; color: #fff;
           font-family: var(--ntc-font, system-ui, sans-serif); }
         .rail { display: none; width: 4px; background: var(--accent); }
         .badge { display: ${c.show_label ? "flex" : "none"}; align-items: center; gap: 8px; white-space: nowrap; font-weight: 500; }
+        .badge.two { flex-direction: column; align-items: flex-start; justify-content: center; gap: 2px; }
+        .brow { display: flex; align-items: center; gap: 8px; }
         .badge .dot { width: 8px; height: 8px; border-radius: 50%; background: #fff; flex: 0 0 auto; }
         #label { display: inline-flex; align-items: center; justify-content: flex-start; transition: opacity .18s ease; }
+        .blabel { font-size: ${labelSize}px; }
         .measure { position: absolute; left: -9999px; top: -9999px; visibility: hidden; white-space: nowrap; }
-        .blabel { font-size: ${Math.max(12, fs - 3)}px; }
         .binfo { display: inline-flex; align-items: baseline; }
-        .binfo .ilabel { font-size: ${ifs}px; font-weight: 500; opacity: .62; letter-spacing: .3px; margin-right: 5px; }
-        .binfo .ival { font-size: ${ifs}px; font-weight: 500; opacity: .95; }
-        .info { display: none; align-items: center; gap: 7px; padding: 0 14px; white-space: nowrap;
+        .binfo .ilabel { font-size: ${iSize}px; font-weight: 500; opacity: .62; letter-spacing: .3px; margin-right: 5px; }
+        .binfo .ival { font-size: ${iSize}px; font-weight: 500; opacity: .95; }
+        /* two-row info line under the label */
+        .inforow { white-space: nowrap; transition: opacity .18s ease; }
+        .inforow .ilabel { font-size: ${iSize}px; font-weight: 500; opacity: .6; letter-spacing: .3px; margin-right: 5px; }
+        .inforow .ival { font-size: ${iSize}px; font-weight: 500; opacity: .95; }
+        /* inline chip */
+        .chip { display: flex; align-items: center; gap: 7px; padding: 0 14px; white-space: nowrap;
           background: rgba(0,0,0,.22); transition: opacity .18s ease; }
-        .info .ilabel { font-size: ${Math.max(10, fs - 7)}px; font-weight: 500; opacity: .7; letter-spacing: .4px; }
-        .info .ival { font-size: ${Math.max(12, fs - 3)}px; font-weight: 500; color: var(--accent); }
+        .chip .ilabel { font-size: ${Math.max(10, iSize)}px; font-weight: 500; opacity: .7; letter-spacing: .4px; }
+        .chip .ival { font-size: ${Math.max(12, iSize + 2)}px; font-weight: 500; color: var(--accent); }
         .tk { flex: 1; overflow: hidden; position: relative; display: flex; align-items: center;
           -webkit-mask-image: linear-gradient(90deg,transparent,#000 20px,#000 calc(100% - 20px),transparent);
           mask-image: linear-gradient(90deg,transparent,#000 20px,#000 calc(100% - 20px),transparent); }
@@ -305,19 +341,23 @@ class NewsTickerCard extends HTMLElement {
         .bar[data-style="live"] .badge .dot { background: var(--accent); box-shadow: 0 0 8px var(--accent); }
         .bar[data-style="live"] .trk { text-transform: uppercase; letter-spacing: .5px; color: #dfe6ee; font-size: ${Math.max(12, fs - 3)}px; }
         .bar[data-style="live"] .side { color: #6b7a88; border-left: 1px solid #1c2430; }
-        .bar[data-style="live"] .info { background: #0b0f15; }
+        .bar[data-style="live"] .chip { background: #0b0f15; }
 
         .bar[data-style="split"] { background: rgba(20,16,28,.6); backdrop-filter: blur(10px) saturate(140%);
           -webkit-backdrop-filter: blur(10px) saturate(140%); border: 1px solid rgba(255,255,255,.08); }
-        .bar[data-style="split"] .badge { background: var(--accent); padding: 0 16px; letter-spacing: .7px;
+        .bar[data-style="split"] .badge { padding: 0 16px; letter-spacing: .7px; background: var(--accent);
           text-transform: ${c.uppercase ? "uppercase" : "none"}; }
         .bar[data-style="split"] .badge .dot { display: none; }
         .bar[data-style="split"] .side { color: #c9c4e8; }
       </style>
       <div class="bar" data-style="${c.style}">
         <div class="rail"></div>
-        <div class="badge"><span class="dot"></span><span id="label"></span><span class="measure" id="measure"></span></div>
-        ${inline ? '<div class="info" id="info"></div>' : ""}
+        <div class="badge${two ? " two" : ""}">
+          ${two
+            ? '<span class="brow"><span class="dot"></span><span id="label"></span></span><span class="inforow" id="info"></span>'
+            : '<span class="dot"></span><span id="label"></span><span class="measure" id="measure"></span>'}
+        </div>
+        ${inline ? '<div class="chip" id="info"></div>' : ""}
         <div class="tk"><div class="trk" id="track"></div></div>
         <div class="side">
           <div id="clock"></div>
@@ -325,7 +365,7 @@ class NewsTickerCard extends HTMLElement {
         </div>
       </div>`;
     this._built = true;
-    this._renderBadge();
+    this._renderForMode();
     this._syncToggle();
     const tog = root.getElementById("toggle");
     if (tog) tog.addEventListener("click", (e) => {
@@ -333,12 +373,11 @@ class NewsTickerCard extends HTMLElement {
       if (!l || l === this._lang) return;
       this._lang = l;
       try { localStorage.setItem("ntc_lang", l); } catch (err) {}
-      this._renderBadge(); this._fitBadge(); this._syncToggle(); this._loadNews();
+      this._renderForMode(); this._syncToggle(); this._loadNews();
     });
     this._updateTime();
     if (this._headlines) this._renderTicker();
-    if (this._info && this._inline()) this._renderInfoChip();
-    requestAnimationFrame(() => this._fitBadge());
+    requestAnimationFrame(() => { if (this._mode() === "badge1") this._fitBadge(); });
   }
 
   _syncToggle() {
@@ -382,13 +421,10 @@ class NewsTickerCardEditor extends HTMLElement {
     const row = (label, key, type, val) =>
       '<label class="r"><span>' + label + '</span><input data-key="' + key + '" type="' + type + '" value="' + esc(val) + '" ' +
       (type === "checkbox" && val ? "checked" : "") + "></label>";
-    const opt = (key, val, choices) =>
-      '<label class="r"><span>' + key.label + '</span><select data-key="' + key.k + '">' +
+    const opt = (label, key, val, choices) =>
+      '<label class="r"><span>' + label + '</span><select data-key="' + key + '">' +
       choices.map((o) => '<option value="' + o + '"' + (val === o ? " selected" : "") + ">" + o + "</option>").join("") + "</select></label>";
-    const styleSel =
-      '<label class="r"><span>Style</span><select data-key="style">' +
-      NTC_STYLES.map((s) => '<option value="' + s + '"' + (c.style === s ? " selected" : "") + ">" +
-        s.charAt(0).toUpperCase() + s.slice(1) + "</option>").join("") + "</select></label>";
+    const styleSel = opt("Style", "style", c.style || "glass", NTC_STYLES);
     const sel = Array.isArray(c.info_items) ? c.info_items : [];
     const infoChecks = NTC_INFO_ALL.map((id) => '<label class="r"><span>' + (NTC_INFO_LABEL[id] || id) +
       ' <small>(' + id + ')</small></span><input data-info="' + id + '" type="checkbox" ' +
@@ -398,6 +434,7 @@ class NewsTickerCardEditor extends HTMLElement {
         .r{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:5px 0;}
         .r span{font-size:14px;} .r small{opacity:.6;}
         .sec{margin:10px 0 2px;font-size:13px;font-weight:500;opacity:.8;border-top:1px solid var(--divider-color,#333);padding-top:8px;}
+        .hint{font-size:12px;opacity:.6;margin:2px 0 0;}
         select,input[type=text],input[type=number]{width:58%;padding:6px;border-radius:6px;
           border:1px solid var(--divider-color,#ccc);background:var(--card-background-color,#fff);color:var(--primary-text-color,#000);}
       </style>
@@ -422,7 +459,9 @@ class NewsTickerCardEditor extends HTMLElement {
         ${row("Uppercase badge", "uppercase", "checkbox", c.uppercase !== false)}
         <div class="sec">Info</div>
         ${row("Show info", "show_info", "checkbox", !!c.show_info)}
-        ${opt({ k: "info_position", label: "Info position" }, c.info_position || "badge", ["badge", "inline"])}
+        ${opt("Info position", "info_position", c.info_position || "badge", ["badge", "inline"])}
+        ${row("Info text size (px, 0 = auto)", "info_font_size", "number", c.info_font_size != null ? c.info_font_size : 0)}
+        <p class="hint">Bigger than the badge label → info drops to a 2nd row.</p>
         ${row("Rotate every (seconds)", "info_rotate_seconds", "number", c.info_rotate_seconds != null ? c.info_rotate_seconds : 6)}
         ${infoChecks}
         <div class="sec">Sources</div>
