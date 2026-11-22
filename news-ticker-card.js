@@ -3,8 +3,9 @@
  *  Info (gold/silver/weather/date/location) from /local/info.json
  *  v2.4 — 4 styles, EN/TA toggle, live clock, info rotates in the badge
  *         (small text, alternating with the label) or as a standalone chip.
+ *  v2.5 — badge width is pinned to its widest frame so it never resizes mid-cycle.
  */
-const NTC_VERSION = "2.4";
+const NTC_VERSION = "2.5";
 const NTC_STYLES = ["breaking", "glass", "live", "split"];
 const NTC_DEFAULT_LABEL = { breaking: "BREAKING", glass: "NEWS", live: "LIVE", split: "TOP NEWS" };
 const NTC_INFO_ALL = ["gold24", "gold22", "silver", "weather", "date", "location"];
@@ -128,7 +129,7 @@ class NewsTickerCard extends HTMLElement {
       const doc = await resp.json();
       this._info = doc && doc.items ? doc : { items: {}, location: "" };
     } catch (e) { /* keep last good */ }
-    if (this._inline()) this._renderInfoChip(); else this._renderBadge();
+    if (this._inline()) this._renderInfoChip(); else { this._renderBadge(); this._fitBadge(); }
   }
   _setStatus(msg) {
     const track = this.shadowRoot && this.shadowRoot.getElementById("track");
@@ -183,6 +184,23 @@ class NewsTickerCard extends HTMLElement {
     const it = seq[this._badgeIdx];
     if (it === "__label__") slot.innerHTML = '<span class="blabel">' + this._esc(this._labelText()) + "</span>";
     else slot.innerHTML = '<span class="binfo">' + this._infoHTML(it) + "</span>";
+  }
+
+  // measure every badge frame, pin the slot to the widest so it never resizes mid-cycle
+  _fitBadge() {
+    if (this._inline()) return;
+    const slot = this.shadowRoot && this.shadowRoot.getElementById("label");
+    const m = this.shadowRoot && this.shadowRoot.getElementById("measure");
+    if (!slot || !m) return;
+    const seq = this._badgeSeq();
+    let max = 0;
+    seq.forEach((it) => {
+      m.innerHTML = it === "__label__"
+        ? '<span class="blabel">' + this._esc(this._labelText()) + "</span>"
+        : '<span class="binfo">' + this._infoHTML(it) + "</span>";
+      if (m.offsetWidth > max) max = m.offsetWidth;
+    });
+    slot.style.minWidth = max > 0 ? max + "px" : "";
   }
 
   // inline mode: standalone chip element (#info)
@@ -241,7 +259,8 @@ class NewsTickerCard extends HTMLElement {
         .rail { display: none; width: 4px; background: var(--accent); }
         .badge { display: ${c.show_label ? "flex" : "none"}; align-items: center; gap: 8px; white-space: nowrap; font-weight: 500; }
         .badge .dot { width: 8px; height: 8px; border-radius: 50%; background: #fff; flex: 0 0 auto; }
-        #label { display: inline-flex; align-items: center; transition: opacity .18s ease; }
+        #label { display: inline-flex; align-items: center; justify-content: flex-start; transition: opacity .18s ease; }
+        .measure { position: absolute; left: -9999px; top: -9999px; visibility: hidden; white-space: nowrap; }
         .blabel { font-size: ${Math.max(12, fs - 3)}px; }
         .binfo { display: inline-flex; align-items: baseline; }
         .binfo .ilabel { font-size: ${ifs}px; font-weight: 500; opacity: .62; letter-spacing: .3px; margin-right: 5px; }
@@ -297,7 +316,7 @@ class NewsTickerCard extends HTMLElement {
       </style>
       <div class="bar" data-style="${c.style}">
         <div class="rail"></div>
-        <div class="badge"><span class="dot"></span><span id="label"></span></div>
+        <div class="badge"><span class="dot"></span><span id="label"></span><span class="measure" id="measure"></span></div>
         ${inline ? '<div class="info" id="info"></div>' : ""}
         <div class="tk"><div class="trk" id="track"></div></div>
         <div class="side">
@@ -314,11 +333,12 @@ class NewsTickerCard extends HTMLElement {
       if (!l || l === this._lang) return;
       this._lang = l;
       try { localStorage.setItem("ntc_lang", l); } catch (err) {}
-      this._renderBadge(); this._syncToggle(); this._loadNews();
+      this._renderBadge(); this._fitBadge(); this._syncToggle(); this._loadNews();
     });
     this._updateTime();
     if (this._headlines) this._renderTicker();
     if (this._info && this._inline()) this._renderInfoChip();
+    requestAnimationFrame(() => this._fitBadge());
   }
 
   _syncToggle() {

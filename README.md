@@ -1,6 +1,6 @@
 # 📰 News Ticker Card
 
-![version](https://img.shields.io/badge/version-2.4-blue) ![HACS](https://img.shields.io/badge/HACS-Custom-orange) ![Home Assistant](https://img.shields.io/badge/Home%20Assistant-2024.1+-green) ![license](https://img.shields.io/badge/license-MIT-lightgrey)
+![version](https://img.shields.io/badge/version-2.5-blue) ![HACS](https://img.shields.io/badge/HACS-Custom-orange) ![Home Assistant](https://img.shields.io/badge/Home%20Assistant-2024.1+-green) ![license](https://img.shields.io/badge/license-MIT-lightgrey)
 
 A modern, broadcast-style scrolling **news ticker** card for Home Assistant dashboards. Reads headlines from a simple local JSON file, scrolls them smoothly like a TV news channel, and ships with **4 selectable styles**, a **live clock**, and a **two-language toggle** (e.g. English / Tamil) — all configurable from a built-in visual editor.
 
