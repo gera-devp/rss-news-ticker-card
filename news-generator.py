@@ -35,13 +35,16 @@ def log(msg):
     except OSError:
         pass
 
-def fetch(url):
-    req = urllib.request.Request(url, headers={"User-Agent": UA})
+def fetch(url, extra=None):
+    h = {"User-Agent": UA}
+    if extra:
+        h.update(extra)
+    req = urllib.request.Request(url, headers=h)
     with urllib.request.urlopen(req, timeout=20) as r:
         return r.read()
 
-def fetch_json(url):
-    return json.loads(fetch(url).decode("utf-8", "replace"))
+def fetch_json(url, extra=None):
+    return json.loads(fetch(url, extra).decode("utf-8", "replace"))
 
 def write_atomic(path, data_str):
     fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path), suffix=".tmp")
@@ -78,25 +81,49 @@ def parse_feed(xml_bytes):
     return titles
 
 # ---------------------------------------------------------------- info: metals
-def parse_metals(doc):
-    """goldprice.org dbXRates/INR -> {'gold24','gold22','silver'} (per gram)."""
-    item = doc["items"][0]
-    xau = float(item["xauPrice"])   # gold INR / troy oz
-    xag = float(item["xagPrice"])   # silver INR / troy oz
-    g24 = xau / GRAMS_PER_OZT
+def _metals_from_ozt(xau_inr, xag_inr):
+    """Gold/silver INR-per-troy-ounce -> per-gram dict (24K, 22K, silver)."""
+    g24 = xau_inr / GRAMS_PER_OZT
     return {
         "gold24": inr(g24) + "/g",
         "gold22": inr(g24 * 22.0 / 24.0) + "/g",
-        "silver": inr(xag / GRAMS_PER_OZT) + "/g",
+        "silver": inr(xag_inr / GRAMS_PER_OZT) + "/g",
     }
 
+def parse_metals(doc):
+    """goldprice.org dbXRates/INR payload -> per-gram dict."""
+    item = doc["items"][0]
+    return _metals_from_ozt(float(item["xauPrice"]), float(item["xagPrice"]))
+
+# goldprice.org blocks bare requests; it needs browser-like headers.
+GP_HEADERS = {
+    "Accept": "application/json, text/plain, */*",
+    "Referer": "https://goldprice.org/",
+    "Origin": "https://goldprice.org",
+    "X-Requested-With": "XMLHttpRequest",
+}
+
+def _metals_goldprice():
+    doc = fetch_json("https://data-asg.goldprice.org/dbXRates/INR", GP_HEADERS)
+    return parse_metals(doc)
+
+def _metals_goldapi_fx():
+    """Fallback: gold-api.com (USD/oz) x USD->INR (frankfurter)."""
+    rate = float(fetch_json("https://api.frankfurter.app/latest?from=USD&to=INR")["rates"]["INR"])
+    xau_usd = float(fetch_json("https://api.gold-api.com/price/XAU")["price"])
+    xag_usd = float(fetch_json("https://api.gold-api.com/price/XAG")["price"])
+    return _metals_from_ozt(xau_usd * rate, xag_usd * rate)
+
 def get_metals():
-    try:
-        doc = fetch_json("https://data-asg.goldprice.org/dbXRates/INR")
-        return parse_metals(doc)
-    except Exception as e:
-        log("WARN metals: " + str(e))
-        return {}
+    for name, fn in (("goldprice", _metals_goldprice), ("gold-api+fx", _metals_goldapi_fx)):
+        try:
+            m = fn()
+            if m:
+                log("     metals via " + name)
+                return m
+        except Exception as e:
+            log("WARN metals " + name + ": " + str(e))
+    return {}
 
 # ---------------------------------------------------------------- info: weather
 WMO = {
