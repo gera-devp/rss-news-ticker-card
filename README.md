@@ -1,6 +1,6 @@
 # 📰 News Ticker Card
 
-![version](https://img.shields.io/badge/version-2.1-blue) ![HACS](https://img.shields.io/badge/HACS-Custom-orange) ![Home Assistant](https://img.shields.io/badge/Home%20Assistant-2024.1+-green) ![license](https://img.shields.io/badge/license-MIT-lightgrey)
+![version](https://img.shields.io/badge/version-2.2-blue) ![HACS](https://img.shields.io/badge/HACS-Custom-orange) ![Home Assistant](https://img.shields.io/badge/Home%20Assistant-2024.1+-green) ![license](https://img.shields.io/badge/license-MIT-lightgrey)
 
 A modern, broadcast-style scrolling **news ticker** card for Home Assistant dashboards. Reads headlines from a simple local JSON file, scrolls them smoothly like a TV news channel, and ships with **4 selectable styles**, a **live clock**, and a **two-language toggle** (e.g. English / Tamil) — all configurable from a built-in visual editor.
 
@@ -12,6 +12,8 @@ A modern, broadcast-style scrolling **news ticker** card for Home Assistant dash
 - 🌍 **Two-language toggle** — a per-screen EN/TA switch that remembers your choice (`localStorage`). Works with any two languages; renders full Unicode (Tamil, Hindi, etc.).
 - 🕐 **Live clock** — optional HH:MM:SS and date, updated every second.
 - 🎨 **Visual editor** — style, accent colour, speed, font size, separator, clock and toggle options, all without YAML.
+- 💹 **Rotating info chip** — show **gold rate, silver rate, weather, date, and location** in a slot beside the badge, cycling every few seconds. Pick which items appear from the editor.
+- 📍 **Location** — set a city once; it drives the weather fetch and shows as a place label.
 - ⚡ **Smooth, compositor-driven scroll** — CSS transform animation runs off the main thread, so it stays fluid even when the device is busy (e.g. decoding camera streams on a Pi).
 - 🪶 **Dependency-free** — one `.js` file. No `card-mod`, no frontend libraries.
 
@@ -31,6 +33,27 @@ The JSON format is intentionally simple — a flat array of strings:
 ```
 
 You can populate those files any way you like (Node-RED, an HA `command_line` sensor, your own script); `news-generator.py` is just a clean, reliable default.
+
+### Info chip (gold / silver / weather)
+
+![info slot](info-preview.png)
+
+The same generator also writes an `info.json` that feeds the optional rotating info chip:
+
+```json
+{
+  "location": "Bangalore",
+  "updated": "2026-11-22T20:10:00+05:30",
+  "items": { "gold24": "₹7,846/g", "gold22": "₹7,193/g", "silver": "₹98/g", "weather": "28°C ⛅" }
+}
+```
+
+- **Gold / silver** come from the public [goldprice.org](https://goldprice.org) INR spot feed, converted to per-gram (24K and 22K). These are **indicative spot prices**, not city retail rates (which add duty + making charges).
+- **Weather** comes from the free, keyless [Open-Meteo](https://open-meteo.com) API, for the city set in `LOCATION`.
+- **Date** is rendered by the card itself (always current, no fetch).
+- **Location** is the `LOCATION` value set at the top of `news-generator.py` — change it to your city and the weather follows.
+
+All of this uses only the Python standard library — no API keys, no pip installs.
 
 ## Installation
 
@@ -82,6 +105,14 @@ news_url_en: /local/news_en.json
 news_url_ta: /local/news_ta.json
 speed: 70
 font_size: 24
+location: Bangalore
+show_info: true
+info_rotate_seconds: 6
+info_items:
+  - gold24
+  - silver
+  - weather
+  - date
 ```
 
 ### Options
@@ -106,6 +137,11 @@ font_size: 24
 | `show_lang_toggle` | boolean | `true`               | Show the EN/TA toggle |
 | `pause_on_hover`   | boolean | `true`               | Pause scrolling on hover |
 | `uppercase`        | boolean | `true`               | Uppercase the badge text |
+| `show_info`        | boolean | `false`              | Show the rotating info chip beside the badge |
+| `info_items`       | list    | `[gold24, silver, weather, date]` | Which info items to rotate. Any of: `gold24`, `gold22`, `silver`, `weather`, `date`, `location` |
+| `info_rotate_seconds` | number | `6`               | Seconds each info item is shown before rotating |
+| `info_url`         | string  | `/local/info.json`   | Path to the info JSON written by the generator |
+| `location`         | string  | `""`                 | Place label for the `location` chip; blank falls back to `info.json`'s location |
 
 ## Prerequisites
 

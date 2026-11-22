@@ -1,11 +1,13 @@
 /*! news-ticker-card.js — modern broadcast news ticker for Home Assistant
- *  Reads flat JSON string arrays  ["Headline", ...]  from /local/news_*.json
- *  v2.1 — 4 selectable styles (breaking | glass | live | split), EN/TA toggle,
- *         live clock, visual editor. Backend contract unchanged.
+ *  Headlines from /local/news_*.json  (flat ["Headline", ...] arrays)
+ *  Info chips (gold/silver/weather/date/location) from /local/info.json
+ *  v2.2 — 4 styles, EN/TA toggle, live clock, rotating info slot, visual editor.
  */
-const NTC_VERSION = "2.1";
+const NTC_VERSION = "2.2";
 const NTC_STYLES = ["breaking", "glass", "live", "split"];
 const NTC_DEFAULT_LABEL = { breaking: "BREAKING", glass: "NEWS", live: "LIVE", split: "TOP NEWS" };
+const NTC_INFO_ALL = ["gold24", "gold22", "silver", "weather", "date", "location"];
+const NTC_INFO_LABEL = { gold24: "GOLD 24K", gold22: "GOLD 22K", silver: "SILVER", weather: "", date: "", location: "" };
 
 class NewsTickerCard extends HTMLElement {
   setConfig(config) {
@@ -14,14 +16,15 @@ class NewsTickerCard extends HTMLElement {
     this._config = Object.assign({
       news_url_en: "/local/news_en.json",
       news_url_ta: "/local/news_ta.json",
+      info_url: "/local/info.json",
       default_lang: "en",
       refresh_minutes: 11,
       style: style,
       label: NTC_DEFAULT_LABEL[style],
       label_ta: "செய்திகள்",
-      accent: "",                // "" => use the style's own default accent
-      speed: 60,                 // px per second
-      separator: "",             // "" => use the style's own default separator
+      accent: "",
+      speed: 60,
+      separator: "",
       font_size: 18,
       show_clock: true,
       clock_seconds: true,
@@ -30,9 +33,14 @@ class NewsTickerCard extends HTMLElement {
       show_lang_toggle: true,
       pause_on_hover: true,
       uppercase: true,
+      show_info: false,
+      info_items: ["gold24", "silver", "weather", "date"],
+      info_rotate_seconds: 6,
+      location: "",
     }, config);
     this._config.style = style;
     if (config.label == null) this._config.label = NTC_DEFAULT_LABEL[style];
+    if (!Array.isArray(this._config.info_items)) this._config.info_items = [];
 
     let lang = this._config.default_lang === "ta" ? "ta" : "en";
     try {
@@ -43,9 +51,13 @@ class NewsTickerCard extends HTMLElement {
 
     if (!this.shadowRoot) this.attachShadow({ mode: "open" });
     this._built = false;
+    this._info = null;
+    this._infoIdx = 0;
     this._build();
     this._loadNews();
+    this._loadInfo();
     this._startClock();
+    this._startInfoRotate();
     this._scheduleRefresh();
   }
 
@@ -53,17 +65,18 @@ class NewsTickerCard extends HTMLElement {
 
   connectedCallback() {
     if (this._config && !this._built) {
-      this._build(); this._loadNews(); this._startClock(); this._scheduleRefresh();
+      this._build(); this._loadNews(); this._loadInfo();
+      this._startClock(); this._startInfoRotate(); this._scheduleRefresh();
     }
   }
   disconnectedCallback() {
-    clearInterval(this._clockTimer); clearInterval(this._refreshTimer);
+    clearInterval(this._clockTimer); clearInterval(this._refreshTimer); clearInterval(this._infoTimer);
   }
 
   _scheduleRefresh() {
     clearInterval(this._refreshTimer);
     const m = Number(this._config.refresh_minutes) || 11;
-    this._refreshTimer = setInterval(() => this._loadNews(), m * 60 * 1000);
+    this._refreshTimer = setInterval(() => { this._loadNews(); this._loadInfo(); }, m * 60 * 1000);
   }
   _startClock() {
     clearInterval(this._clockTimer);
@@ -102,6 +115,16 @@ class NewsTickerCard extends HTMLElement {
       this._renderTicker();
     } catch (e) { this._setStatus("⚠ " + e.message); }
   }
+  async _loadInfo() {
+    if (!this._config.show_info) return;
+    try {
+      const u = this._config.info_url + (this._config.info_url.indexOf("?") >= 0 ? "&" : "?") + "_=" + Date.now();
+      const resp = await fetch(u, { cache: "no-store" });
+      const doc = await resp.json();
+      this._info = doc && doc.items ? doc : { items: {}, location: "" };
+      this._renderInfo();
+    } catch (e) { /* leave last good info */ }
+  }
   _setStatus(msg) {
     const track = this.shadowRoot && this.shadowRoot.getElementById("track");
     if (track) track.innerHTML = '<span class="status">' + this._esc(msg) + "</span>";
@@ -116,6 +139,52 @@ class NewsTickerCard extends HTMLElement {
     return { breaking: "◆", glass: "/", live: "•", split: "·" }[this._config.style];
   }
 
+  _infoValue(id) {
+    if (id === "date") {
+      return new Date().toLocaleDateString(undefined, { weekday: "short", day: "2-digit", month: "short" });
+    }
+    if (id === "location") {
+      const loc = this._config.location || (this._info && this._info.location) || "";
+      return loc ? "📍 " + loc : "";
+    }
+    return this._info && this._info.items ? (this._info.items[id] || "") : "";
+  }
+  _activeInfoItems() {
+    const out = [];
+    (this._config.info_items || []).forEach((id) => {
+      if (NTC_INFO_ALL.indexOf(id) < 0) return;
+      if (this._infoValue(id)) out.push(id);
+    });
+    return out;
+  }
+  _renderInfo() {
+    const el = this.shadowRoot && this.shadowRoot.getElementById("info");
+    if (!el) return;
+    const items = this._activeInfoItems();
+    if (!items.length) { el.style.display = "none"; el.innerHTML = ""; return; }
+    el.style.display = "flex";
+    if (this._infoIdx >= items.length) this._infoIdx = 0;
+    const id = items[this._infoIdx];
+    const label = NTC_INFO_LABEL[id];
+    const val = this._infoValue(id);
+    el.innerHTML =
+      (label ? '<span class="ilabel">' + this._esc(label) + "</span>" : "") +
+      '<span class="ival">' + this._esc(val) + "</span>";
+  }
+  _startInfoRotate() {
+    clearInterval(this._infoTimer);
+    if (!this._config.show_info) return;
+    const secs = Math.max(2, Number(this._config.info_rotate_seconds) || 6);
+    this._infoTimer = setInterval(() => {
+      const items = this._activeInfoItems();
+      if (items.length <= 1) { this._renderInfo(); return; }
+      const el = this.shadowRoot && this.shadowRoot.getElementById("info");
+      this._infoIdx = (this._infoIdx + 1) % items.length;
+      if (el) { el.style.opacity = "0"; setTimeout(() => { this._renderInfo(); el.style.opacity = "1"; }, 180); }
+      else this._renderInfo();
+    }, secs * 1000);
+  }
+
   _build() {
     const c = this._config, root = this.shadowRoot;
     const accent = this._accent();
@@ -123,18 +192,17 @@ class NewsTickerCard extends HTMLElement {
     root.innerHTML = `
       <style>
         :host { display: block; }
-        .bar {
-          --accent: ${accent};
-          display: flex; align-items: stretch; position: relative;
-          height: calc(${fs}px + 24px);
-          border-radius: 12px; overflow: hidden; color: #fff;
-          font-family: var(--ntc-font, system-ui, sans-serif);
-        }
+        .bar { --accent: ${accent}; display: flex; align-items: stretch; position: relative;
+          height: calc(${fs}px + 24px); border-radius: 12px; overflow: hidden; color: #fff;
+          font-family: var(--ntc-font, system-ui, sans-serif); }
         .rail { display: none; width: 4px; background: var(--accent); }
-        .badge { display: ${c.show_label ? "flex" : "none"}; align-items: center; gap: 8px;
-          white-space: nowrap; font-weight: 500; }
+        .badge { display: ${c.show_label ? "flex" : "none"}; align-items: center; gap: 8px; white-space: nowrap; font-weight: 500; }
         .badge .dot { width: 8px; height: 8px; border-radius: 50%; background: #fff; }
         #label { font-size: ${Math.max(12, fs - 3)}px; }
+        .info { display: none; align-items: center; gap: 7px; padding: 0 14px; white-space: nowrap;
+          background: rgba(0,0,0,.22); transition: opacity .18s ease; }
+        .ilabel { font-size: ${Math.max(10, fs - 7)}px; font-weight: 500; opacity: .7; letter-spacing: .4px; }
+        .ival { font-size: ${Math.max(12, fs - 3)}px; font-weight: 500; color: var(--accent); }
         .tk { flex: 1; overflow: hidden; position: relative; display: flex; align-items: center;
           -webkit-mask-image: linear-gradient(90deg,transparent,#000 20px,#000 calc(100% - 20px),transparent);
           mask-image: linear-gradient(90deg,transparent,#000 20px,#000 calc(100% - 20px),transparent); }
@@ -153,15 +221,12 @@ class NewsTickerCard extends HTMLElement {
         .toggle span { padding: 3px 9px; opacity: .5; }
         .toggle span.on { background: var(--accent); opacity: 1; }
 
-        /* breaking */
         .bar[data-style="breaking"] { background: rgba(18,20,26,.55); backdrop-filter: blur(11px) saturate(140%);
           -webkit-backdrop-filter: blur(11px) saturate(140%); border: 1px solid rgba(255,255,255,.08); }
-        .bar[data-style="breaking"] .badge { background: var(--accent); padding: 0 24px 0 14px;
-          letter-spacing: 1.3px; text-transform: ${c.uppercase ? "uppercase" : "none"};
-          clip-path: polygon(0 0,100% 0,calc(100% - 12px) 100%,0 100%); }
+        .bar[data-style="breaking"] .badge { background: var(--accent); padding: 0 24px 0 14px; letter-spacing: 1.3px;
+          text-transform: ${c.uppercase ? "uppercase" : "none"}; clip-path: polygon(0 0,100% 0,calc(100% - 12px) 100%,0 100%); }
         .bar[data-style="breaking"] .badge .dot { animation: ntc-pulse 1.6s infinite; }
 
-        /* glass */
         .bar[data-style="glass"] { background: rgba(255,255,255,.07); backdrop-filter: blur(14px) saturate(150%);
           -webkit-backdrop-filter: blur(14px) saturate(150%); border: 1px solid rgba(255,255,255,.12); }
         .bar[data-style="glass"] .rail { display: block; }
@@ -169,15 +234,13 @@ class NewsTickerCard extends HTMLElement {
         .bar[data-style="glass"] .badge .dot { display: none; }
         .bar[data-style="glass"] .side { color: #d3d9e0; }
 
-        /* live */
         .bar[data-style="live"] { background: #07090d; border: 1px solid #1c2430; }
-        .bar[data-style="live"] .badge { padding: 0 18px 0 14px; color: var(--accent); letter-spacing: 2px;
-          text-transform: uppercase; }
+        .bar[data-style="live"] .badge { padding: 0 18px 0 14px; color: var(--accent); letter-spacing: 2px; text-transform: uppercase; }
         .bar[data-style="live"] .badge .dot { background: var(--accent); box-shadow: 0 0 8px var(--accent); }
         .bar[data-style="live"] .trk { text-transform: uppercase; letter-spacing: .5px; color: #dfe6ee; font-size: ${Math.max(12, fs - 3)}px; }
         .bar[data-style="live"] .side { color: #6b7a88; border-left: 1px solid #1c2430; }
+        .bar[data-style="live"] .info { background: #0b0f15; }
 
-        /* split */
         .bar[data-style="split"] { background: rgba(20,16,28,.6); backdrop-filter: blur(10px) saturate(140%);
           -webkit-backdrop-filter: blur(10px) saturate(140%); border: 1px solid rgba(255,255,255,.08); }
         .bar[data-style="split"] .badge { background: var(--accent); padding: 0 16px; letter-spacing: .7px;
@@ -188,6 +251,7 @@ class NewsTickerCard extends HTMLElement {
       <div class="bar" data-style="${c.style}">
         <div class="rail"></div>
         <div class="badge"><span class="dot"></span><span id="label"></span></div>
+        <div class="info" id="info"></div>
         <div class="tk"><div class="trk" id="track"></div></div>
         <div class="side">
           <div id="clock"></div>
@@ -206,12 +270,12 @@ class NewsTickerCard extends HTMLElement {
     });
     this._updateTime();
     if (this._headlines) this._renderTicker();
+    if (this._info) this._renderInfo();
   }
 
   _syncLabel() {
     const el = this.shadowRoot.getElementById("label");
-    if (el) el.textContent = this._lang === "ta"
-      ? (this._config.label_ta || this._config.label) : this._config.label;
+    if (el) el.textContent = this._lang === "ta" ? (this._config.label_ta || this._config.label) : this._config.label;
   }
   _syncToggle() {
     const t = this.shadowRoot.getElementById("toggle");
@@ -246,9 +310,7 @@ customElements.define("news-ticker-card", NewsTickerCard);
 class NewsTickerCardEditor extends HTMLElement {
   setConfig(config) { this._config = Object.assign({}, config); this._render(); }
   set hass(h) { this._hass = h; }
-  _emit() {
-    this.dispatchEvent(new CustomEvent("config-changed", { detail: { config: this._config }, bubbles: true, composed: true }));
-  }
+  _emit() { this.dispatchEvent(new CustomEvent("config-changed", { detail: { config: this._config }, bubbles: true, composed: true })); }
   _render() {
     if (!this.shadowRoot) this.attachShadow({ mode: "open" });
     const c = this._config;
@@ -260,13 +322,18 @@ class NewsTickerCardEditor extends HTMLElement {
       '<label class="r"><span>Style</span><select data-key="style">' +
       NTC_STYLES.map((s) => '<option value="' + s + '"' + (c.style === s ? " selected" : "") + ">" +
         s.charAt(0).toUpperCase() + s.slice(1) + "</option>").join("") + "</select></label>";
+    const sel = Array.isArray(c.info_items) ? c.info_items : [];
+    const infoChecks = '<div class="sec">Info items (left of headlines)</div>' +
+      NTC_INFO_ALL.map((id) => '<label class="r"><span>' + (NTC_INFO_LABEL[id] || id) +
+        ' <small>(' + id + ')</small></span><input data-info="' + id + '" type="checkbox" ' +
+        (sel.indexOf(id) >= 0 ? "checked" : "") + "></label>").join("");
     this.shadowRoot.innerHTML = `
       <style>
         .r{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:5px 0;}
-        .r span{font-size:14px;}
+        .r span{font-size:14px;} .r small{opacity:.6;}
+        .sec{margin:10px 0 2px;font-size:13px;font-weight:500;opacity:.8;border-top:1px solid var(--divider-color,#333);padding-top:8px;}
         select,input[type=text],input[type=number]{width:58%;padding:6px;border-radius:6px;
           border:1px solid var(--divider-color,#ccc);background:var(--card-background-color,#fff);color:var(--primary-text-color,#000);}
-        input[type=color]{width:44px;height:28px;border:none;background:none;padding:0;}
       </style>
       <div>
         ${styleSel}
@@ -278,18 +345,26 @@ class NewsTickerCardEditor extends HTMLElement {
         ${row("Refresh (minutes)", "refresh_minutes", "number", c.refresh_minutes != null ? c.refresh_minutes : 11)}
         ${row("Default language (en/ta)", "default_lang", "text", c.default_lang || "en")}
         ${row("Separator (blank = default)", "separator", "text", c.separator != null ? c.separator : "")}
+        ${row("Location", "location", "text", c.location != null ? c.location : "")}
+        <div class="sec">Toggles</div>
         ${row("Show clock", "show_clock", "checkbox", c.show_clock !== false)}
         ${row("Clock seconds", "clock_seconds", "checkbox", c.clock_seconds !== false)}
-        ${row("Show date", "show_date", "checkbox", !!c.show_date)}
+        ${row("Show date (clock area)", "show_date", "checkbox", !!c.show_date)}
         ${row("Show badge", "show_label", "checkbox", c.show_label !== false)}
         ${row("Show EN/TA toggle", "show_lang_toggle", "checkbox", c.show_lang_toggle !== false)}
         ${row("Pause on hover", "pause_on_hover", "checkbox", c.pause_on_hover !== false)}
         ${row("Uppercase badge", "uppercase", "checkbox", c.uppercase !== false)}
+        <div class="sec">Info slot</div>
+        ${row("Show info slot", "show_info", "checkbox", !!c.show_info)}
+        ${row("Rotate every (seconds)", "info_rotate_seconds", "number", c.info_rotate_seconds != null ? c.info_rotate_seconds : 6)}
+        ${infoChecks}
+        <div class="sec">Sources</div>
         ${row("News URL (EN)", "news_url_en", "text", c.news_url_en || "/local/news_en.json")}
         ${row("News URL (TA)", "news_url_ta", "text", c.news_url_ta || "/local/news_ta.json")}
+        ${row("Info URL", "info_url", "text", c.info_url || "/local/info.json")}
       </div>`;
     const commit = (k, v) => { this._config = Object.assign({}, this._config, { [k]: v }); this._emit(); };
-    this.shadowRoot.querySelectorAll("input").forEach((inp) => {
+    this.shadowRoot.querySelectorAll("input[data-key]").forEach((inp) => {
       inp.addEventListener("change", (e) => {
         const k = e.target.getAttribute("data-key");
         let v;
@@ -299,14 +374,21 @@ class NewsTickerCardEditor extends HTMLElement {
         commit(k, v);
       });
     });
-    const sel = this.shadowRoot.querySelector("select");
-    if (sel) sel.addEventListener("change", (e) => commit("style", e.target.value));
+    this.shadowRoot.querySelectorAll("input[data-info]").forEach((inp) => {
+      inp.addEventListener("change", () => {
+        const items = [];
+        this.shadowRoot.querySelectorAll("input[data-info]").forEach((x) => { if (x.checked) items.push(x.getAttribute("data-info")); });
+        commit("info_items", items);
+      });
+    });
+    const s = this.shadowRoot.querySelector("select[data-key='style']");
+    if (s) s.addEventListener("change", (e) => commit("style", e.target.value));
   }
 }
 customElements.define("news-ticker-card-editor", NewsTickerCardEditor);
 
 window.customCards = window.customCards || [];
 window.customCards.push({ type: "news-ticker-card", name: "News Ticker Card",
-  description: "Broadcast-style scrolling news ticker (EN/Tamil), 4 styles, live clock.", preview: true });
+  description: "Broadcast-style scrolling news ticker (EN/Tamil), 4 styles, live clock, info chips.", preview: true });
 console.info("%c NEWS-TICKER-CARD %c v" + NTC_VERSION + " ",
   "background:#e10600;color:#fff;font-weight:700;border-radius:4px 0 0 4px;", "background:#333;color:#fff;border-radius:0 4px 4px 0;");
