@@ -3,7 +3,7 @@
  *  Info chips (gold/silver/weather/date/location) from /local/info.json
  *  v2.2 — 4 styles, EN/TA toggle, live clock, rotating info slot, visual editor.
  */
-const NTC_VERSION = "2.2";
+const NTC_VERSION = "2.3";
 const NTC_STYLES = ["breaking", "glass", "live", "split"];
 const NTC_DEFAULT_LABEL = { breaking: "BREAKING", glass: "NEWS", live: "LIVE", split: "TOP NEWS" };
 const NTC_INFO_ALL = ["gold24", "gold22", "silver", "weather", "date", "location"];
@@ -36,6 +36,7 @@ class NewsTickerCard extends HTMLElement {
       show_info: false,
       info_items: ["gold24", "silver", "weather", "date"],
       info_rotate_seconds: 6,
+      info_position: "badge",   // "badge" (small line under the label) | "inline" (chip)
       location: "",
     }, config);
     this._config.style = style;
@@ -189,6 +190,8 @@ class NewsTickerCard extends HTMLElement {
     const c = this._config, root = this.shadowRoot;
     const accent = this._accent();
     const fs = Number(c.font_size) || 18;
+    const ifs = Math.max(10, Math.round(fs - 28));     // small info text
+    const inBadge = c.info_position !== "inline";
     root.innerHTML = `
       <style>
         :host { display: block; }
@@ -196,13 +199,20 @@ class NewsTickerCard extends HTMLElement {
           height: calc(${fs}px + 24px); border-radius: 12px; overflow: hidden; color: #fff;
           font-family: var(--ntc-font, system-ui, sans-serif); }
         .rail { display: none; width: 4px; background: var(--accent); }
-        .badge { display: ${c.show_label ? "flex" : "none"}; align-items: center; gap: 8px; white-space: nowrap; font-weight: 500; }
+        .badge { display: ${c.show_label ? "flex" : "none"}; flex-direction: column; justify-content: center;
+          white-space: nowrap; font-weight: 500; line-height: 1.1; }
+        .brow { display: flex; align-items: center; gap: 8px; }
         .badge .dot { width: 8px; height: 8px; border-radius: 50%; background: #fff; }
         #label { font-size: ${Math.max(12, fs - 3)}px; }
+        /* small info line inside the badge */
+        .binfo { display: none; margin-top: 2px; white-space: nowrap; transition: opacity .18s ease; }
+        .binfo .ilabel { font-size: ${ifs}px; font-weight: 500; opacity: .62; letter-spacing: .3px; margin-right: 5px; }
+        .binfo .ival { font-size: ${ifs}px; font-weight: 500; color: inherit; opacity: .95; }
+        /* standalone chip (info_position: inline) */
         .info { display: none; align-items: center; gap: 7px; padding: 0 14px; white-space: nowrap;
           background: rgba(0,0,0,.22); transition: opacity .18s ease; }
-        .ilabel { font-size: ${Math.max(10, fs - 7)}px; font-weight: 500; opacity: .7; letter-spacing: .4px; }
-        .ival { font-size: ${Math.max(12, fs - 3)}px; font-weight: 500; color: var(--accent); }
+        .info .ilabel { font-size: ${Math.max(10, fs - 7)}px; font-weight: 500; opacity: .7; letter-spacing: .4px; }
+        .info .ival { font-size: ${Math.max(12, fs - 3)}px; font-weight: 500; color: var(--accent); }
         .tk { flex: 1; overflow: hidden; position: relative; display: flex; align-items: center;
           -webkit-mask-image: linear-gradient(90deg,transparent,#000 20px,#000 calc(100% - 20px),transparent);
           mask-image: linear-gradient(90deg,transparent,#000 20px,#000 calc(100% - 20px),transparent); }
@@ -250,8 +260,11 @@ class NewsTickerCard extends HTMLElement {
       </style>
       <div class="bar" data-style="${c.style}">
         <div class="rail"></div>
-        <div class="badge"><span class="dot"></span><span id="label"></span></div>
-        <div class="info" id="info"></div>
+        <div class="badge">
+          <span class="brow"><span class="dot"></span><span id="label"></span></span>
+          ${inBadge ? '<span class="binfo" id="info"></span>' : ""}
+        </div>
+        ${inBadge ? "" : '<div class="info" id="info"></div>'}
         <div class="tk"><div class="trk" id="track"></div></div>
         <div class="side">
           <div id="clock"></div>
@@ -389,6 +402,6 @@ customElements.define("news-ticker-card-editor", NewsTickerCardEditor);
 
 window.customCards = window.customCards || [];
 window.customCards.push({ type: "news-ticker-card", name: "News Ticker Card",
-  description: "Broadcast-style scrolling news ticker (EN/Tamil), 4 styles, live clock, info chips.", preview: true });
+  description: "Broadcast-style scrolling news ticker (EN/Tamil), 4 styles, live clock, info line.", preview: true });
 console.info("%c NEWS-TICKER-CARD %c v" + NTC_VERSION + " ",
   "background:#e10600;color:#fff;font-weight:700;border-radius:4px 0 0 4px;", "background:#333;color:#fff;border-radius:0 4px 4px 0;");
