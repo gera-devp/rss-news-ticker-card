@@ -17,6 +17,10 @@ FEEDS = {
     "news_ta.json": "https://feeds.bbci.co.uk/tamil/rss.xml",
 }
 LOCATION  = "Bangalore"     # drives weather + the place label shown on the card
+# Spot -> India retail (pre-GST) multipliers. Calibrated Nov 2026 to Bengaluru
+# jeweller-board rates (Goodreturns). Retune if import duty changes at budget time.
+RETAIL_MULT_GOLD   = 1.164
+RETAIL_MULT_SILVER = 1.08
 MAX_ITEMS = 15
 STRIP_SOURCE = True
 UA  = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"
@@ -82,12 +86,19 @@ def parse_feed(xml_bytes):
 
 # ---------------------------------------------------------------- info: metals
 def _metals_from_ozt(xau_inr, xag_inr):
-    """Gold/silver INR-per-troy-ounce -> per-gram dict (24K, 22K, silver)."""
-    g24 = xau_inr / GRAMS_PER_OZT
+    """Gold/silver INR-per-troy-ounce spot -> per-gram India retail (pre-GST).
+
+    goldprice.org gives international spot. Indian retail adds import duty
+    (~6%) + a retail premium (~10%), so spot x RETAIL_MULT_GOLD approximates
+    the pre-GST jeweller-board rate (e.g. Goodreturns). Final bills still add
+    3% GST + making charges. Retune the multipliers if import duty changes.
+    """
+    g24 = xau_inr / GRAMS_PER_OZT * RETAIL_MULT_GOLD
+    g_silver = xag_inr / GRAMS_PER_OZT * RETAIL_MULT_SILVER
     return {
         "gold24": inr(g24) + "/g",
         "gold22": inr(g24 * 22.0 / 24.0) + "/g",
-        "silver": inr(xag_inr / GRAMS_PER_OZT) + "/g",
+        "silver": inr(g_silver) + "/g",
     }
 
 def parse_metals(doc):
