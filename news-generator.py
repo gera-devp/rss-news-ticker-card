@@ -12,16 +12,28 @@ import xml.etree.ElementTree as ET
 from datetime import datetime
 
 # ---------------------------------------------------------------- config
+# Multiple feeds per language are merged + de-duplicated. A dead feed is
+# skipped (logged) so the others still fill the ticker.
 FEEDS = {
-    "news_en.json": "https://timesofindia.indiatimes.com/rssfeedstopstories.cms",
-    "news_ta.json": "https://feeds.bbci.co.uk/tamil/rss.xml",
+    "news_en.json": [
+        "https://timesofindia.indiatimes.com/rssfeedstopstories.cms",
+        "https://www.thehindu.com/news/national/feeder/default.rss",
+        "https://indianexpress.com/section/india/feed/",
+        "https://feeds.bbci.co.uk/news/world/asia/india/rss.xml",
+    ],
+    "news_ta.json": [
+        "https://feeds.bbci.co.uk/tamil/rss.xml",
+        "https://tamil.oneindia.com/rss/feeds/tamil-news-fb.xml",
+        "https://tamil.samayam.com/rssfeedstopstories.cms",
+    ],
 }
 LOCATION  = "Bangalore"     # drives weather + the place label shown on the card
 # Spot -> India retail (pre-GST) multipliers. Calibrated Nov 2026 to Bengaluru
 # jeweller-board rates (Goodreturns). Retune if import duty changes at budget time.
 RETAIL_MULT_GOLD   = 1.164
 RETAIL_MULT_SILVER = 1.08
-MAX_ITEMS = 15
+MAX_ITEMS    = 30
+PER_FEED_MAX = 20
 STRIP_SOURCE = True
 UA  = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"
 OUT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -80,9 +92,26 @@ def parse_feed(xml_bytes):
             t = t.rsplit(" - ", 1)[0].strip()
         if t:
             titles.append(t)
-        if len(titles) >= MAX_ITEMS:
+        if len(titles) >= PER_FEED_MAX:
             break
     return titles
+
+def build_headlines(urls):
+    """Fetch several feeds, merge in order, de-duplicate by title, cap total."""
+    out, seen = [], set()
+    for url in urls:
+        try:
+            for t in parse_feed(fetch(url)):
+                key = t.lower()
+                if key in seen:
+                    continue
+                seen.add(key)
+                out.append(t)
+        except Exception as e:
+            log("     feed skipped " + url.split("/")[2] + ": " + str(e))
+        if len(out) >= MAX_ITEMS:
+            break
+    return out[:MAX_ITEMS]
 
 # ---------------------------------------------------------------- info: metals
 def _metals_from_ozt(xau_inr, xag_inr):
@@ -192,10 +221,10 @@ def build_info():
 # ---------------------------------------------------------------- main
 def main():
     failures = 0
-    for fname, url in FEEDS.items():
+    for fname, urls in FEEDS.items():
         path = os.path.join(OUT_DIR, fname)
         try:
-            titles = parse_feed(fetch(url))
+            titles = build_headlines(urls)
             if not titles:
                 raise ValueError("0 headlines parsed - keeping existing file")
             write_atomic(path, json.dumps(titles, ensure_ascii=False))
