@@ -1,6 +1,6 @@
 # 📰 News Ticker Card
 
-![version](https://img.shields.io/badge/version-2.6-blue) ![HACS](https://img.shields.io/badge/HACS-Custom-orange) ![Home Assistant](https://img.shields.io/badge/Home%20Assistant-2024.1+-green) ![license](https://img.shields.io/badge/license-MIT-lightgrey)
+![version](https://img.shields.io/badge/version-2.7-blue) ![HACS](https://img.shields.io/badge/HACS-Custom-orange) ![Home Assistant](https://img.shields.io/badge/Home%20Assistant-2024.1+-green) ![license](https://img.shields.io/badge/license-MIT-lightgrey)
 
 A modern, broadcast-style scrolling **news ticker** card for Home Assistant dashboards. Reads headlines from a simple local JSON file, scrolls them smoothly like a TV news channel, and ships with **4 selectable styles**, a **live clock**, and a **two-language toggle** (e.g. English / Tamil) — all configurable from a built-in visual editor.
 
@@ -15,6 +15,7 @@ A modern, broadcast-style scrolling **news ticker** card for Home Assistant dash
 - 💹 **Rotating info chip** — show **gold rate, silver rate, weather, date, and location** in a slot beside the badge, cycling every few seconds. Pick which items appear from the editor.
 - 📍 **Location** — set a city once; it drives the weather fetch and shows as a place label.
 - ⚡ **Smooth, compositor-driven scroll** — CSS transform animation runs off the main thread, so it stays fluid even when the device is busy (e.g. decoding camera streams on a Pi).
+- 📱 **Responsive** — text scales to the card's width (container queries), so it's big on a wall kiosk and readable on a phone; on narrow screens it tightens spacing and drops the clock's seconds. Re-fits on rotation/resize.
 - 🪶 **Dependency-free** — one `.js` file. No `card-mod`, no frontend libraries.
 
 ## How it works

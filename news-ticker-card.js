@@ -6,7 +6,7 @@
  *  v2.6 — info_font_size setting; when info text is bigger than the label it
  *         moves to a 2nd row under the label (badge grows) instead of one line.
  */
-const NTC_VERSION = "2.6";
+const NTC_VERSION = "2.7";
 const NTC_STYLES = ["breaking", "glass", "live", "split"];
 const NTC_DEFAULT_LABEL = { breaking: "BREAKING", glass: "NEWS", live: "LIVE", split: "TOP NEWS" };
 const NTC_INFO_ALL = ["gold24", "gold22", "silver", "weather", "date", "location"];
@@ -77,6 +77,7 @@ class NewsTickerCard extends HTMLElement {
   }
   disconnectedCallback() {
     clearInterval(this._clockTimer); clearInterval(this._refreshTimer); clearInterval(this._rotTimer);
+    if (this._ro) { this._ro.disconnect(); this._ro = null; }
   }
 
   _inline() { return this._config.info_position === "inline"; }
@@ -113,14 +114,15 @@ class NewsTickerCard extends HTMLElement {
     if (!el) return;
     const now = new Date();
     const pad = (n) => String(n).padStart(2, "0");
-    let out = "";
+    let main = "", secs = "";
     if (this._config.show_date)
-      out += now.toLocaleDateString(undefined, { day: "2-digit", month: "short" }) + "  ";
+      main += now.toLocaleDateString(undefined, { day: "2-digit", month: "short" }) + " ";
     if (this._config.show_clock) {
-      out += pad(now.getHours()) + ":" + pad(now.getMinutes());
-      if (this._config.clock_seconds) out += ":" + pad(now.getSeconds());
+      main += pad(now.getHours()) + ":" + pad(now.getMinutes());
+      if (this._config.clock_seconds) secs = ":" + pad(now.getSeconds());
     }
-    el.textContent = out.trim();
+    // seconds in their own span so a narrow screen can drop them via @container
+    el.innerHTML = this._esc(main.trim()) + (secs ? '<span class="secs">' + secs + "</span>" : "");
   }
 
   _url() {
@@ -279,11 +281,15 @@ class NewsTickerCard extends HTMLElement {
     const inline = mode === "inline";
     const two = mode === "two";
     const barH = two ? Math.max(fs + 24, labelSize + iSize + 22) : (fs + 24);
+    // responsive: scale to the card's own width (container query units), capped
+    // at the configured px — big on a wide kiosk, smaller on a phone.
+    const R = (min, cq, max) => `clamp(${min}px, ${cq}cqi, ${max}px)`;
+    const iMin = two ? 11 : 9, iCq = two ? 3.4 : 2.6;
     root.innerHTML = `
       <style>
-        :host { display: block; }
+        :host { display: block; container-type: inline-size; }
         .bar { --accent: ${accent}; display: flex; align-items: stretch; position: relative;
-          height: ${barH}px; border-radius: 12px; overflow: hidden; color: #fff;
+          height: ${R(two ? 44 : 34, two ? 13 : 10, barH)}; border-radius: 12px; overflow: hidden; color: #fff;
           font-family: var(--ntc-font, system-ui, sans-serif); }
         .rail { display: none; width: 4px; background: var(--accent); }
         .badge { display: ${c.show_label ? "flex" : "none"}; align-items: center; gap: 8px; white-space: nowrap; font-weight: 500; }
@@ -291,25 +297,25 @@ class NewsTickerCard extends HTMLElement {
         .brow { display: flex; align-items: center; gap: 8px; }
         .badge .dot { width: 8px; height: 8px; border-radius: 50%; background: #fff; flex: 0 0 auto; }
         #label { display: inline-flex; align-items: center; justify-content: flex-start; transition: opacity .18s ease; }
-        .blabel { font-size: ${labelSize}px; }
+        .blabel { font-size: ${R(12, 3.8, labelSize)}; }
         .measure { position: absolute; left: -9999px; top: -9999px; visibility: hidden; white-space: nowrap; }
         .binfo { display: inline-flex; align-items: baseline; }
-        .binfo .ilabel { font-size: ${iSize}px; font-weight: 500; opacity: .62; letter-spacing: .3px; margin-right: 5px; }
-        .binfo .ival { font-size: ${iSize}px; font-weight: 500; opacity: .95; }
+        .binfo .ilabel { font-size: ${R(iMin, iCq, iSize)}; font-weight: 500; opacity: .62; letter-spacing: .3px; margin-right: 5px; }
+        .binfo .ival { font-size: ${R(iMin, iCq, iSize)}; font-weight: 500; opacity: .95; }
         /* two-row info line under the label */
         .inforow { white-space: nowrap; transition: opacity .18s ease; }
-        .inforow .ilabel { font-size: ${iSize}px; font-weight: 500; opacity: .6; letter-spacing: .3px; margin-right: 5px; }
-        .inforow .ival { font-size: ${iSize}px; font-weight: 500; opacity: .95; }
+        .inforow .ilabel { font-size: ${R(iMin, iCq, iSize)}; font-weight: 500; opacity: .6; letter-spacing: .3px; margin-right: 5px; }
+        .inforow .ival { font-size: ${R(iMin, iCq, iSize)}; font-weight: 500; opacity: .95; }
         /* inline chip */
         .chip { display: flex; align-items: center; gap: 7px; padding: 0 14px; white-space: nowrap;
           background: rgba(0,0,0,.22); transition: opacity .18s ease; }
-        .chip .ilabel { font-size: ${Math.max(10, iSize)}px; font-weight: 500; opacity: .7; letter-spacing: .4px; }
-        .chip .ival { font-size: ${Math.max(12, iSize + 2)}px; font-weight: 500; color: var(--accent); }
+        .chip .ilabel { font-size: ${R(9, 2.4, Math.max(10, iSize))}; font-weight: 500; opacity: .7; letter-spacing: .4px; }
+        .chip .ival { font-size: ${R(11, 2.8, Math.max(12, iSize + 2))}; font-weight: 500; color: var(--accent); }
         .tk { flex: 1; overflow: hidden; position: relative; display: flex; align-items: center;
           -webkit-mask-image: linear-gradient(90deg,transparent,#000 20px,#000 calc(100% - 20px),transparent);
           mask-image: linear-gradient(90deg,transparent,#000 20px,#000 calc(100% - 20px),transparent); }
         .trk { display: inline-flex; align-items: center; white-space: nowrap; will-change: transform;
-          font-size: ${fs}px; font-weight: 500; animation: ntc-scroll linear infinite; }
+          font-size: ${R(11, 4.2, fs)}; font-weight: 500; animation: ntc-scroll linear infinite; }
         .tk:hover .trk { animation-play-state: ${c.pause_on_hover ? "paused" : "running"}; }
         .headline { padding: 0 2px; }
         .sep { color: var(--accent); padding: 0 15px; }
@@ -317,11 +323,18 @@ class NewsTickerCard extends HTMLElement {
         @keyframes ntc-scroll { from { transform: translateX(0); } to { transform: translateX(-50%); } }
         @keyframes ntc-pulse { 0%{box-shadow:0 0 0 0 rgba(255,255,255,.55);} 70%{box-shadow:0 0 0 7px rgba(255,255,255,0);} 100%{box-shadow:0 0 0 0 rgba(255,255,255,0);} }
         .side { display: flex; align-items: center; gap: 10px; padding: 0 12px; white-space: nowrap; }
-        #clock { font-variant-numeric: tabular-nums; font-weight: 500; font-size: ${Math.max(12, fs - 4)}px; letter-spacing: .3px; }
+        #clock { font-variant-numeric: tabular-nums; font-weight: 500; font-size: ${R(10, 2.4, Math.max(12, fs - 4))}; letter-spacing: .3px; }
         .toggle { display: ${c.show_lang_toggle ? "inline-flex" : "none"}; border: 1px solid rgba(255,255,255,.22);
-          border-radius: 999px; overflow: hidden; font-size: ${Math.max(11, fs - 7)}px; font-weight: 500; cursor: pointer; user-select: none; }
+          border-radius: 999px; overflow: hidden; font-size: ${R(9, 2, Math.max(11, fs - 7))}; font-weight: 500; cursor: pointer; user-select: none; }
         .toggle span { padding: 3px 9px; opacity: .5; }
         .toggle span.on { background: var(--accent); opacity: 1; }
+        /* narrow screens (phones): reclaim width for the headlines */
+        @container (max-width: 440px) {
+          .secs { display: none; }
+          .side { gap: 6px; padding: 0 8px; }
+          .toggle span { padding: 3px 7px; }
+          .sep { padding: 0 10px; }
+        }
 
         .bar[data-style="breaking"] { background: rgba(18,20,26,.55); backdrop-filter: blur(11px) saturate(140%);
           -webkit-backdrop-filter: blur(11px) saturate(140%); border: 1px solid rgba(255,255,255,.08); }
@@ -339,7 +352,7 @@ class NewsTickerCard extends HTMLElement {
         .bar[data-style="live"] { background: #07090d; border: 1px solid #1c2430; }
         .bar[data-style="live"] .badge { padding: 0 18px 0 14px; color: var(--accent); letter-spacing: 2px; text-transform: uppercase; }
         .bar[data-style="live"] .badge .dot { background: var(--accent); box-shadow: 0 0 8px var(--accent); }
-        .bar[data-style="live"] .trk { text-transform: uppercase; letter-spacing: .5px; color: #dfe6ee; font-size: ${Math.max(12, fs - 3)}px; }
+        .bar[data-style="live"] .trk { text-transform: uppercase; letter-spacing: .5px; color: #dfe6ee; font-size: ${R(11, 4.2, Math.max(12, fs - 3))}; }
         .bar[data-style="live"] .side { color: #6b7a88; border-left: 1px solid #1c2430; }
         .bar[data-style="live"] .chip { background: #0b0f15; }
 
@@ -378,6 +391,20 @@ class NewsTickerCard extends HTMLElement {
     this._updateTime();
     if (this._headlines) this._renderTicker();
     requestAnimationFrame(() => { if (this._mode() === "badge1") this._fitBadge(); });
+    // re-fit badge width + recompute scroll duration when the card is resized
+    // (window resize, phone rotation, sidebar toggle, responsive breakpoints)
+    if (this._ro) this._ro.disconnect();
+    if (typeof ResizeObserver !== "undefined") {
+      this._ro = new ResizeObserver(() => {
+        clearTimeout(this._roT);
+        this._roT = setTimeout(() => {
+          if (this._mode() === "badge1") this._fitBadge();
+          if (this._headlines) this._renderTicker();
+        }, 150);
+      });
+      const bar = root.querySelector(".bar");
+      if (bar) this._ro.observe(bar);
+    }
   }
 
   _syncToggle() {
