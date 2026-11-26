@@ -48,7 +48,7 @@ The same generator also writes an `info.json` that feeds the optional rotating i
 }
 ```
 
-- **Gold / silver** come from the public [goldprice.org](https://goldprice.org) INR spot feed, converted to per-gram (24K and 22K) and scaled to **India retail (pre-GST)** via the `RETAIL_MULT_GOLD`/`RETAIL_MULT_SILVER` multipliers at the top of the script (calibrated to Bengaluru jeweller-board rates). Final bills still add 3% GST + making charges. Retune the multipliers if import duty changes.
+- **Gold / silver** are scraped from [Goodreturns](https://www.goodreturns.in) city retail pages (24K, 22K, silver per gram) for the city set in `LOCATION` — so they match local jeweller-board rates. If the scrape ever fails, it falls back to the [goldprice.org](https://goldprice.org) spot feed scaled by `RETAIL_MULT_GOLD`/`RETAIL_MULT_SILVER`. Rates exclude GST; final bills add 3% GST + making charges.
 - **Weather** comes from the free, keyless [Open-Meteo](https://open-meteo.com) API, for the city set in `LOCATION`.
 - **Date** is rendered by the card itself (always current, no fetch).
 - **Location** is the `LOCATION` value set at the top of `news-generator.py` — change it to your city and the weather follows.

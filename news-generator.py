@@ -7,7 +7,7 @@ Outputs (in this file's folder, usually /config/www/):
   info.json     {"location":"Bangalore","items":{"gold24":"...","silver":"...","weather":"..."}}
 Standard library only. Atomic writes, 0644, keep-last-good on failure.
 """
-import json, sys, os, tempfile, urllib.request
+import json, sys, os, tempfile, urllib.request, re, html as _html
 import xml.etree.ElementTree as ET
 from datetime import datetime
 
@@ -154,8 +154,47 @@ def _metals_goldapi_fx():
     xag_usd = float(fetch_json("https://api.gold-api.com/price/XAG")["price"])
     return _metals_from_ozt(xau_usd * rate, xag_usd * rate)
 
+# --- primary source: real India retail rates scraped from Goodreturns -------
+GR_HEADERS = { "Accept": "text/html,application/xhtml+xml", "Accept-Language": "en-IN,en" }
+GR_GOLD   = "https://www.goodreturns.in/gold-rates/{city}.html"
+GR_SILVER = "https://www.goodreturns.in/silver-rates/{city}.html"
+
+def _plain(xbytes):
+    """HTML bytes -> collapsed plain text (tags stripped, entities decoded)."""
+    t = xbytes.decode("utf-8", "replace")
+    t = re.sub(r"<[^>]+>", " ", t)
+    t = _html.unescape(t)
+    return re.sub(r"\s+", " ", t)
+
+def _grab(pattern, text):
+    m = re.search(pattern, text, re.I)
+    return int(m.group(1).replace(",", "")) if m else None
+
+def _retail_goodreturns():
+    city = LOCATION.strip().lower().replace(" ", "-")
+    gold = _plain(fetch(GR_GOLD.format(city=city), GR_HEADERS))
+    g24 = _grab(r"([\d,]+)\s*per\s*gram\s*for\s*24\s*karat", gold)
+    g22 = _grab(r"([\d,]+)\s*per\s*gram\s*for\s*22\s*karat", gold)
+    silver = _plain(fetch(GR_SILVER.format(city=city), GR_HEADERS))
+    sv = _grab(r"([\d,]+)\s*per\s*gram\s*and[₹\s]*[\d,]+\s*per\s*kilogram", silver)
+    if sv is None:
+        sv = _grab(r"\bis[₹\s]*([\d,]+)\s*per\s*gram", silver)
+    out = {}
+    if g24:
+        out["gold24"] = inr(g24) + "/g"
+        out["gold22"] = inr(g22) + "/g" if g22 else inr(int(g24 * 22 / 24)) + "/g"
+    elif g22:
+        out["gold22"] = inr(g22) + "/g"
+    if sv:
+        out["silver"] = inr(sv) + "/g"
+    if not out:
+        raise ValueError("no retail numbers parsed")
+    return out
+
 def get_metals():
-    for name, fn in (("goldprice", _metals_goldprice), ("gold-api+fx", _metals_goldapi_fx)):
+    for name, fn in (("goodreturns-retail", _retail_goodreturns),
+                     ("goldprice-spot", _metals_goldprice),
+                     ("gold-api-spot", _metals_goldapi_fx)):
         try:
             m = fn()
             if m:
